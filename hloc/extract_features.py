@@ -103,6 +103,16 @@ confs = {
             'resize_max': 1024,
         },
     },
+    'LSD_LBD': {
+        'output': 'feats-lsd',
+        'model': {
+            'name': 'lsd'
+        },
+        'preprocessing': {
+            'grayscale': True,
+            'resize_max': 800,
+        },
+    },
 }
 
 
@@ -200,13 +210,22 @@ def main(conf, image_dir, export_dir=None, as_half=False,
             continue
 
         pred = model(map_tensor(data, lambda x: x.to(device)))
-        pred = {k: v[0].cpu().numpy() for k, v in pred.items()}
+        for k, v in pred.items():
+            if isinstance(v, torch.Tensor):
+                pred[k] = v[0].cpu().numpy()
 
         pred['image_size'] = original_size = data['original_size'][0].numpy()
         if 'keypoints' in pred:
             size = np.array(data['image'].shape[-2:][::-1])
             scales = (original_size / size).astype(np.float32)
             pred['keypoints'] = (pred['keypoints'] + .5) * scales[None] - .5
+
+        if 'line_segments' in pred:
+            size = np.array(data['image'].shape[-2:][::-1])
+            scales = (original_size / size).astype(np.float32)
+            # TODO: Figure out the -.5 stuff here applies to the LSD segments
+            pred['line_segments'][:,0:2] = (pred['line_segments'][:,0:2] + .5) * scales[None] - .5
+            pred['line_segments'][:,2:4] = (pred['line_segments'][:,2:4] + .5) * scales[None] - .5
 
         if as_half:
             for k in pred:

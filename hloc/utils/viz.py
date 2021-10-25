@@ -109,6 +109,53 @@ def plot_matches(kpts0, kpts1, color=None, lw=1.5, ps=4, indices=(0, 1), a=1.):
         ax1.scatter(kpts1[:, 0], kpts1[:, 1], c=color, s=ps)
 
 
+def plot_line_matches(lins0, lins1, color=None, lw=1.5, ps=4, indices=(0, 1), a=1.):
+    """Plot matches for a pair of existing images.
+    Args:
+        kpts0, kpts1: corresponding keypoints of size (N, 2).
+        color: color of each match, string or RGB tuple. Random if not given.
+        lw: width of the lines.
+        ps: size of the end points (no endpoint if ps=0)
+        indices: indices of the images to draw the matches on.
+        a: alpha opacity of the match lines.
+    """
+    fig = plt.gcf()
+    ax = fig.axes
+    assert len(ax) > max(indices)
+    ax0, ax1 = ax[indices[0]], ax[indices[1]]
+    fig.canvas.draw()
+
+    assert len(lins0) == len(lins1)
+    if color is None:
+        color = matplotlib.cm.hsv(np.random.rand(len(lins0))).tolist()
+    elif len(color) > 0 and not isinstance(color[0], (tuple, list)):
+        color = [color] * len(lins0)
+
+    if lw > 0:
+        # transform the center points into the figure coordinate system
+        transFigure = fig.transFigure.inverted()
+        fkpts0 = transFigure.transform(ax0.transData.transform(0.5 * (lins0[:,0:2] + lins0[:,2:4])))
+        fkpts1 = transFigure.transform(ax1.transData.transform(0.5 * (lins1[:,0:2] + lins1[:,2:4])))
+
+        fig.lines += [matplotlib.lines.Line2D(
+            (fkpts0[i, 0], fkpts1[i, 0]), (fkpts0[i, 1], fkpts1[i, 1]),
+            zorder=1, transform=fig.transFigure, c=color[i], linewidth=lw,
+            alpha=a)
+            for i in range(len(lins0))]
+
+    # freeze the axes to prevent the transform to change
+    ax0.autoscale(enable=False)
+    ax1.autoscale(enable=False)
+
+    line_colors = matplotlib.cm.hsv(np.random.rand(len(lins0))).tolist()
+
+    if ps > 0:
+        ax0.lines += [matplotlib.lines.Line2D((lins0[i,0],lins0[i,2]),(lins0[i,1],lins0[i,3]),
+                      transform=ax0.transData, c=line_colors[i], linewidth=ps) for i in range(len(lins0))]
+        ax1.lines += [matplotlib.lines.Line2D((lins1[i,0],lins1[i,2]),(lins1[i,1],lins1[i,3]),
+                      transform=ax1.transData, c=line_colors[i], linewidth=ps) for i in range(len(lins0))]
+
+
 def add_text(idx, text, pos=(0.01, 0.99), fs=15, color='w',
              lcolor='k', lwidth=2, ha='left', va='top'):
     ax = plt.gcf().axes[idx]

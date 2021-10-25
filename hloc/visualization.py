@@ -5,7 +5,7 @@ import pickle
 
 from .utils.read_write_model import read_images_binary, read_points3D_binary
 from .utils.viz import (
-        plot_images, plot_keypoints, plot_matches, cm_RdGn, add_text)
+        plot_images, plot_keypoints, plot_matches, plot_line_matches, cm_RdGn, add_text)
 from .utils.io import read_image
 
 
@@ -81,6 +81,11 @@ def visualize_loc(results, image_dir, sfm_model=None, top_k_db=2,
             # select the first, largest cluster if the localization failed
             loc = loc['log_clusters'][loc['best_cluster'] or 0]
 
+        have_lines = 'inliers_lines' in loc['PnP_ret']
+        if have_lines:
+            mlin_q = loc['lines_query']
+            inliers_lines = np.array(loc['PnP_ret']['inliers_lines'])
+
         inliers = np.array(loc['PnP_ret']['inliers'])
         mkp_q = loc['keypoints_query']
         n = len(loc['db'])
@@ -130,6 +135,27 @@ def visualize_loc(results, image_dir, sfm_model=None, top_k_db=2,
 
             plot_images([q_image, db_image], dpi=dpi)
             plot_matches(kp_q, kp_db, color, a=0.1)
+            add_text(0, text)
+            add_text(0, q, pos=(0.01, 0.01), fs=5, lcolor=None, va='bottom')
+            add_text(1, db_name, pos=(0.01, 0.01), fs=5,
+                     lcolor=None, va='bottom')
+
+            if not have_lines:
+                continue
+
+            if is_sfm:
+                # TODO: implement visualization when we have SfM models
+                continue
+            else:
+                db_name = loc['db'][db_idx]
+                lin_q = mlin_q[loc['line_indices_db'] == db_idx]
+                lin_db = loc['lines_db'][loc['line_indices_db'] == db_idx]
+                inliers_db = inliers_lines[loc['line_indices_db'] == db_idx]
+
+            color = cm_RdGn(inliers_db).tolist()
+            text = f'inliers: {sum(inliers_db)}/{len(inliers_db)}'
+            plot_images([q_image, db_image], dpi=dpi)
+            plot_line_matches(lin_q, lin_db, color, a=0.1)
             add_text(0, text)
             add_text(0, q, pos=(0.01, 0.01), fs=5, lcolor=None, va='bottom')
             add_text(1, db_name, pos=(0.01, 0.01), fs=5,
