@@ -104,13 +104,13 @@ confs = {
         },
     },
     'LSD_LBD': {
-        'output': 'feats-lsd',
+        'output': 'feats-lsd-r1024',
         'model': {
             'name': 'lsd'
         },
         'preprocessing': {
             'grayscale': True,
-            'resize_max': 800,
+            'resize_max': 1024,
         },
     },
 }
@@ -211,13 +211,13 @@ def main(conf, image_dir, export_dir=None, as_half=False,
 
         pred = model(map_tensor(data, lambda x: x.to(device)))
         for k, v in pred.items():
-            if isinstance(v, torch.Tensor):
+            if isinstance(v[0], torch.Tensor):
                 pred[k] = v[0].cpu().numpy()
 
         pred['image_size'] = original_size = data['original_size'][0].numpy()
         if 'keypoints' in pred:
             size = np.array(data['image'].shape[-2:][::-1])
-            scales = (original_size / size).astype(np.float32)
+            scales = (original_size / size).astype(np.float32)            
             pred['keypoints'] = (pred['keypoints'] + .5) * scales[None] - .5
 
         if 'line_segments' in pred:
