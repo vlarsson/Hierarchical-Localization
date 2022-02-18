@@ -115,6 +115,16 @@ confs = {
             'resize_max': 1024,
         },
     },
+    'LSD_LBD': {
+        'output': 'feats-lsd-r1024',
+        'model': {
+            'name': 'lsd'
+        },
+        'preprocessing': {
+            'grayscale': True,
+            'resize_max': 1024,
+        },
+    },
 }
 
 
@@ -241,6 +251,14 @@ def main(conf: Dict,
             size = np.array(data['image'].shape[-2:][::-1])
             scales = (original_size / size).astype(np.float32)
             pred['keypoints'] = (pred['keypoints'] + .5) * scales[None] - .5
+
+        if 'lines' in pred:
+            size = np.array(data['image'].shape[-2:][::-1])
+            scales = (original_size / size).astype(np.float32)
+            # TODO: Figure out the -.5 stuff here applies to the LSD segments
+            pred['lines'][:,0:2] = (pred['lines'][:,0:2] + .5) * scales[None] - .5
+            pred['lines'][:,2:4] = (pred['lines'][:,2:4] + .5) * scales[None] - .5
+
 
         if as_half:
             for k in pred:

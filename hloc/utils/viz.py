@@ -66,6 +66,18 @@ def plot_keypoints(kpts, colors='lime', ps=4):
     for a, k, c in zip(axes, kpts, colors):
         a.scatter(k[:, 0], k[:, 1], c=c, s=ps, linewidths=0)
 
+def plot_lines(lines, colors='lime', ps=4):
+    """Plot lines for existing images.
+    Args:
+        lines: list of ndarrays of size (N, 4).
+        colors: string, or list of list of tuples (one for each keypoints).
+        ps: size of the keypoints as float.
+    """
+    if not isinstance(colors, list):
+        colors = [colors] * len(lines)
+    axes = plt.gcf().axes
+    for a, k, c in zip(axes, lines, colors):
+        a.plot(k[:,[0,2]].T, k[:,[1,3]].T)
 
 def plot_matches(kpts0, kpts1, color=None, lw=1.5, ps=4, indices=(0, 1), a=1.):
     """Plot matches for a pair of existing images.

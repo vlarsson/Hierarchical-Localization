@@ -7,9 +7,11 @@ import h5py
 from tqdm import tqdm
 import pickle
 import pycolmap
+import poselib
 
 from . import logger
 from .utils.parsers import parse_image_lists, parse_retrieval, names_to_pair
+from .utils.line_helpers import *
 
 
 def do_covisibility_clustering(frame_ids: List[int],
@@ -56,12 +58,23 @@ class QueryLocalizer:
     def localize(self, points2D_all, points2D_idxs, points3D_id, query_camera):
         points2D = points2D_all[points2D_idxs]
         points3D = [self.reconstruction.points3D[j].xyz for j in points3D_id]
-        ret = pycolmap.absolute_pose_estimation(
-            points2D, points3D, query_camera,
-            estimation_options=self.config.get('estimation', {}),
-            refinement_options=self.config.get('refinement', {}),
+        camera_dict = {
+            'model': query_camera.model_name,
+            'width': query_camera.width,
+            'height': query_camera.height,
+            'params': query_camera.params
+        }
+        pose, info = poselib.estimate_absolute_pose(
+            points2D, points3D,
+            camera_dict,
+            {"max_reproj_error": 12.0},
+            {"loss_scale": 1.0}
         )
-        return ret
+
+        info['qvec'] = pose.q
+        info['tvec'] = pose.t
+        info['success'] = (info['num_inliers'] > 3)
+        return info
 
 
 def pose_from_cluster(
@@ -71,11 +84,22 @@ def pose_from_cluster(
         db_ids: List[int],
         features_path: Path,
         matches_path: Path,
+        reference_lines=None,
+        query_lines=None,
+        line_detection_resize=800,
         **kwargs):
+
+    have_lines = reference_lines is not None and query_lines is not None
 
     with h5py.File(features_path, 'r') as f:
         kpq = f[qname]['keypoints'].__array__()
     kpq += 0.5  # COLMAP coordinates
+
+    # query lines
+    q_scaling_factor = max(query_camera.width, query_camera.height) / line_detection_resize
+    q_line_im = query_lines.images[query_lines.get_id(qname)]
+    q_lines2d = q_line_im['lines2D'] * q_scaling_factor
+    q_lines2d += 0.5
 
     kp_idx_to_3D = defaultdict(list)
     kp_idx_to_3D_to_db = defaultdict(lambda: defaultdict(list))
@@ -105,7 +129,87 @@ def pose_from_cluster(
     idxs = list(kp_idx_to_3D.keys())
     mkp_idxs = [i for i in idxs for _ in kp_idx_to_3D[i]]
     mp3d_ids = [j for i in idxs for j in kp_idx_to_3D[i]]
-    ret = localizer.localize(kpq, mkp_idxs, mp3d_ids, query_camera, **kwargs)
+
+
+    pts2d = kpq[mkp_idxs]
+    pts3d = [localizer.reconstruction.points3D[j].xyz for j in mp3d_ids]
+    camera_dict = {
+        'model': query_camera.model_name,
+        'width': query_camera.width,
+        'height': query_camera.height,
+        'params': query_camera.params
+    }
+
+    initial_pose, initial_ret = poselib.estimate_absolute_pose(pts2d, pts3d, camera_dict, {}, {"loss_scale": 1.0})
+
+    if have_lines:
+        # Collect 2D-3D line correspondences
+        lin_idx_to_3D = defaultdict(list)
+        lin_idx_to_3D_to_db = defaultdict(lambda: defaultdict(list))
+        num_matches = 0
+        for i, db_id in enumerate(db_ids):
+            db_im = localizer.reconstruction.images[db_id]
+            db_name = db_im.name
+            db_cam = localizer.reconstruction.cameras[db_im.camera_id]
+
+            db_scaling_factor = max(db_cam.width,db_cam.height) / line_detection_resize
+            db_line_im = reference_lines.images[reference_lines.get_id(db_name)]
+            have_3d_lines = np.array(db_line_im['lines3D_ids']) > -1
+            db_lines3d_ids = np.array(db_line_im['lines3D_ids'])[have_3d_lines]
+            db_lines2d = db_line_im['lines2D'][have_3d_lines] * db_scaling_factor
+            db_lines3d = [reference_lines.lines3D[l_id]['xyz'] for l_id in db_lines3d_ids]
+            db_lines2d += 0.5
+
+            db_pose = poselib.CameraPose()
+            db_pose.q = db_im.qvec
+            db_pose.t = db_im.tvec
+
+            if len(db_lines3d) == 0:
+                continue
+
+            matches, scores = match_lines_given_pose(
+                initial_pose, db_pose, q_lines2d, db_lines2d, db_lines3d, db_lines3d_ids, query_camera, db_cam)
+
+            for (idx, db_idx) in matches:
+                id_3D = db_lines3d_ids[db_idx]
+                lin_idx_to_3D_to_db[idx][id_3D].append(i)
+                # avoid duplicate observations
+                if id_3D not in lin_idx_to_3D[idx]:
+                    lin_idx_to_3D[idx].append(id_3D)
+
+        idxs = list(lin_idx_to_3D.keys())
+        mlines2d_idxs = [i for i in idxs for _ in lin_idx_to_3D[i]]
+        mlines3d_ids = [j for i in idxs for j in lin_idx_to_3D[i]]
+
+        if len(mlines2d_idxs) > 0:
+            lin2d = q_lines2d[mlines2d_idxs]
+            lin3d = np.array([reference_lines.lines3D[l_id]['xyz'] for l_id in mlines3d_ids])
+
+            final_pose, ret = poselib.estimate_absolute_pose_pnpl(pts2d,pts3d,
+                            lin2d[:,0:2], lin2d[:,2:4], lin3d[:,0:3], lin3d[:,3:6],camera_dict,{
+                                'max_reproj_error': 12, 'max_epipolar_error': 25.0},{'loss_scale': 1.0})
+        else:
+            final_pose = initial_pose
+            ret = initial_ret
+            lin2d = []
+            lin3d = []
+            mlines3d_ids = []
+    else:
+        final_pose = initial_pose
+        ret = initial_ret
+        lin2d = []
+        lin3d = []
+        mlines3d_ids = []
+
+    initial_center = initial_pose.center()
+    refined_center = final_pose.center()
+
+    print(f'query: {qname}: inlier: {initial_ret["num_inliers"]} -> {ret["num_inliers"]}, line_matches={len(lin2d)}, diff={np.linalg.norm((initial_center-refined_center)*100.0)} cm')
+
+    ret['qvec'] = final_pose.q
+    ret['tvec'] = final_pose.t
+    ret['success'] = ret['num_inliers'] > 3
+
     ret['camera'] = {
         'model': query_camera.model_name,
         'width': query_camera.width,
@@ -122,7 +226,10 @@ def pose_from_cluster(
         'keypoints_query': kpq[mkp_idxs],
         'points3D_ids': mp3d_ids,
         'points3D_xyz': None,  # we don't log xyz anymore because of file size
+        'lines_query': lin2d,
+        'lines3D_ids': mlines3d_ids,
         'num_matches': num_matches,
+        'num_line_matches': len(lin2d),
         'keypoint_index_to_db': (mkp_idxs, mkp_to_3D_to_db),
     }
     return ret, log
@@ -137,7 +244,9 @@ def main(reference_sfm: Union[Path, pycolmap.Reconstruction],
          ransac_thresh: int = 12,
          covisibility_clustering: bool = False,
          prepend_camera_name: bool = False,
-         config: Dict = None):
+         config: Dict = None,
+         reference_lines = None,
+         query_lines = None):
 
     assert retrieval.exists(), retrieval
     assert features.exists(), features
@@ -183,7 +292,7 @@ def main(reference_sfm: Union[Path, pycolmap.Reconstruction],
             logs_clusters = []
             for i, cluster_ids in enumerate(clusters):
                 ret, log = pose_from_cluster(
-                        localizer, qname, qcam, cluster_ids, features, matches)
+                        localizer, qname, qcam, cluster_ids, features, matches, reference_lines, query_lines)
                 if ret['success'] and ret['num_inliers'] > best_inliers:
                     best_cluster = i
                     best_inliers = ret['num_inliers']
@@ -199,7 +308,7 @@ def main(reference_sfm: Union[Path, pycolmap.Reconstruction],
             }
         else:
             ret, log = pose_from_cluster(
-                    localizer, qname, qcam, db_ids, features, matches)
+                    localizer, qname, qcam, db_ids, features, matches, reference_lines, query_lines)
             if ret['success']:
                 poses[qname] = (ret['qvec'], ret['tvec'])
             else:

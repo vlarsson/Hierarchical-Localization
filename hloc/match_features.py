@@ -58,6 +58,12 @@ confs = {
             'name': 'nearest_neighbor',
             'do_mutual_check': True,
         },
+    },
+    'LBD': {
+        'output': 'matches-lbd-heuristic',
+        'model': {
+            'name': 'lbd',
+        },
     }
 }
 
